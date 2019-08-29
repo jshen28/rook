@@ -22,6 +22,10 @@ import (
 	"k8s.io/api/core/v1"
 )
 
+var (
+	publicAddrPrefix = "rook.ceph.io/public-addr"
+)
+
 // NodeUsage is a mapping between a Node and computed metadata about the node
 // that is used in monitor pod scheduling.
 type NodeUsage struct {
@@ -50,6 +54,13 @@ func getNodeInfoFromNode(n v1.Node) (*NodeInfo, error) {
 	nr := &NodeInfo{
 		Name:     n.Name,
 		Hostname: n.Labels[v1.LabelHostname],
+	}
+
+	// demonstrate how to retrieve IP from node label
+	for name, value := range n.Labels {
+		if name == publicAddrPrefix {
+			nr.Address = value
+		}
 	}
 
 	for _, ip := range n.Status.Addresses {
