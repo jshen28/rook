@@ -54,15 +54,7 @@ func GetDeploymentSpecImage(clientset kubernetes.Interface, d apps.Deployment, c
 	return image, nil
 }
 
-// UpdateDeploymentAndWait updates a deployment and waits until it is running to return. It will
-// error if the deployment does not exist to be updated or if it takes too long.
-// This method has a generic callback function that each backend can rely on
-// It serves two purposes:
-//   1. verify that a resource can be stopped
-//   2. verify that we can continue the update procedure
-// Basically, we go one resource by one and check if we can stop and then if the resource has been successfully updated
-// we check if we can go ahead and move to the next one.
-func UpdateDeploymentAndWait(clusterdContext *clusterd.Context, modifiedDeployment *apps.Deployment, namespace string, verifyCallback func(action string) error) (*v1.Deployment, error) {
+func UpdateDeploymentAndWaitForCond(clusterdContext *clusterd.Context, modifiedDeployment *apps.Deployment, namespace string, verifyCallback func(action string) error, verifyWait func() bool, sleepTime int) (*v1.Deployment, error) {
 	ctx := context.TODO()
 	currentDeployment, err := clusterdContext.Clientset.AppsV1().Deployments(namespace).Get(ctx, modifiedDeployment.Name, metav1.GetOptions{})
 	if err != nil {
@@ -101,15 +93,11 @@ func UpdateDeploymentAndWait(clusterdContext *clusterd.Context, modifiedDeployme
 		if _, err := clusterdContext.Clientset.AppsV1().Deployments(namespace).Update(ctx, modifiedDeployment, metav1.UpdateOptions{}); err != nil {
 			return nil, fmt.Errorf("failed to update deployment %q. %v", modifiedDeployment.Name, err)
 		}
-
-		// wait for the deployment to be restarted
-		sleepTime := 2
-		attempts := 30
-		if currentDeployment.Spec.ProgressDeadlineSeconds != nil {
-			// make the attempts double the progress deadline since the pod is both stopping and starting
-			attempts = 2 * (int(*currentDeployment.Spec.ProgressDeadlineSeconds) / sleepTime)
-		}
-		for i := 0; i < attempts; i++ {
+	
+		for {
+			if !verifyWait() {
+				break
+			}
 			// check for the status of the deployment
 			d, err := clusterdContext.Clientset.AppsV1().Deployments(namespace).Get(ctx, modifiedDeployment.Name, metav1.GetOptions{})
 			if err != nil {
@@ -143,6 +131,38 @@ func UpdateDeploymentAndWait(clusterdContext *clusterd.Context, modifiedDeployme
 
 	logger.Infof("deployment %q did not change, nothing to update", currentDeployment.Name)
 	return nil, nil
+}
+
+
+// UpdateDeploymentAndWait updates a deployment and waits until it is running to return. It will
+// error if the deployment does not exist to be updated or if it takes too long.
+// This method has a generic callback function that each backend can rely on
+// It serves two purposes:
+//   1. verify that a resource can be stopped
+//   2. verify that we can continue the update procedure
+// Basically, we go one resource by one and check if we can stop and then if the resource has been successfully updated
+// we check if we can go ahead and move to the next one.
+func UpdateDeploymentAndWait(clusterdContext *clusterd.Context, modifiedDeployment *apps.Deployment, namespace string, verifyCallback func(action string) error) (*v1.Deployment, error) {
+	ctx := context.TODO()
+	currentDeployment, err := clusterdContext.Clientset.AppsV1().Deployments(namespace).Get(ctx, modifiedDeployment.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployment %s. %+v", modifiedDeployment.Name, err)
+	}
+	// wait for the deployment to be restarted
+	sleepTime := 2
+	attempts := 30
+	if currentDeployment.Spec.ProgressDeadlineSeconds != nil {
+		// make the attempts double the progress deadline since the pod is both stopping and starting
+		attempts = 2 * (int(*currentDeployment.Spec.ProgressDeadlineSeconds) / sleepTime)
+	}
+	verifyWait := func() bool {
+		if attempts > 0 {
+			attempts -= 1
+			return true
+		}
+		return false
+	}
+	return UpdateDeploymentAndWaitForCond(clusterdContext, modifiedDeployment, namespace, verifyCallback, verifyWait, sleepTime)
 }
 
 // GetDeployments returns a list of deployment names labels matching a given selector

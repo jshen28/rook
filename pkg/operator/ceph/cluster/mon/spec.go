@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"strconv"
 
 	"github.com/pkg/errors"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
@@ -360,6 +361,33 @@ func UpdateCephDeploymentAndWait(context *clusterd.Context, clusterInfo *client.
 
 		return nil
 	}
+
+	if daemonType == config.OsdType {
+		verifyWait := func() bool {
+			osdDump, err := client.GetOSDDump(context, clusterInfo)
+			if err != nil {
+				logger.Warningf("retrieve info from ceph cluster failed")
+				return true
+			}
+			osdID, err := strconv.Atoi(daemonName)
+			if err != nil {
+				logger.Warningf("osd %s is not an integer", daemonName)
+				return true
+			}
+			_, in, err := osdDump.StatusByID(int64(osdID))
+			if err != nil {
+				logger.Warningf("osd %s could not be found", daemonName)
+				return true
+			}
+			if in == 0 {
+				logger.Warningf("osd %s is already out skip", daemonName)
+				return false
+			}
+			return true
+		}
+		_, err := k8sutil.UpdateDeploymentAndWaitForCond(context, deployment, clusterInfo.Namespace, callback, verifyWait, 2)
+		return err
+	} 
 
 	_, err := k8sutil.UpdateDeploymentAndWait(context, deployment, clusterInfo.Namespace, callback)
 	return err
